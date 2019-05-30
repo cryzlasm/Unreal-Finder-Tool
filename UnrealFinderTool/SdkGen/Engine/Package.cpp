@@ -293,6 +293,16 @@ void Package::GenerateScriptStruct(const UEScriptStruct& scriptStructObj)
 
 	GenerateMembers(scriptStructObj, offset, properties, ss.Members);
 
+	if (generator->GetSdkType() == SdkType::External)
+	{
+		ss.PredefinedMethods.push_back(IGenerator::PredefinedMethod::Inline(tfm::format(R"(	static %s ReadAsMe(uintptr_t address)
+	{
+		%s ret;
+		%s(address, ret);
+		return ret;
+	})", scriptStructObj.GetNameCPP(), scriptStructObj.GetNameCPP(), Utils::Settings.SdkGen.MemoryRead)));
+	}
+
 	generator->GetPredefinedClassMethods(scriptStructObj.GetFullName(), ss.PredefinedMethods);
 
 	ScriptStructs.emplace_back(std::move(ss));
@@ -372,7 +382,6 @@ void Package::GenerateClass(const UEClass& classObj)
 	if (super.IsValid() && super != classObj)
 	{
 		c.InheritedSize = offset = super.GetPropertySize();
-
 		c.NameCppFull += " : public " + MakeValidName(super.GetNameCPP());
 	}
 
@@ -430,67 +439,79 @@ void Package::GenerateClass(const UEClass& classObj)
 	}
 
 	generator->GetPredefinedClassMethods(c.FullName, c.PredefinedMethods);
-
-	if (generator->ShouldUseStrings())
+	
+	if (generator->GetSdkType() == SdkType::External)
 	{
-		c.PredefinedMethods.push_back(IGenerator::PredefinedMethod::Inline(tfm::format(R"(	static UClass* StaticClass()
+		c.PredefinedMethods.push_back(IGenerator::PredefinedMethod::Inline(tfm::format(R"(	static %s ReadAsMe(const uintptr_t address)
+	{
+		%s ret;
+		%s(address, ret);
+		return ret;
+	})", classObj.GetNameCPP(), classObj.GetNameCPP(), Utils::Settings.SdkGen.MemoryRead)));
+	}
+	else
+	{
+		if (generator->ShouldUseStrings())
+		{
+			c.PredefinedMethods.push_back(IGenerator::PredefinedMethod::Inline(tfm::format(R"(	static UClass* StaticClass()
 	{
 		static auto ptr = UObject::FindClass(%s);
 		return ptr;
 	})", generator->ShouldXorStrings() ? tfm::format("_xor_(\"%s\")", c.FullName) : tfm::format("\"%s\"", c.FullName))));
-	}
-	else
-	{
-		c.PredefinedMethods.push_back(IGenerator::PredefinedMethod::Inline(tfm::format(R"(	static UClass* StaticClass()
+		}
+		else
+		{
+			c.PredefinedMethods.push_back(IGenerator::PredefinedMethod::Inline(tfm::format(R"(	static UClass* StaticClass()
 	{
 		static auto ptr = UObject::GetObjectCasted<UClass>(%d);
 		return ptr;
 	})", classObj.GetIndex())));
-	}
-
-	GenerateMethods(classObj, c.Methods);
-
-	//search virtual functions
-	IGenerator::VirtualFunctionPatterns patterns;
-	if (generator->GetVirtualFunctionPatterns(c.FullName, patterns))
-	{
-		int ptrSize = Utils::PointerSize();
-		uintptr_t vTableAddress = classObj.Object.VfTable;
-		std::vector<uintptr_t> vTable;
-
-		size_t methodCount = 0;
-		while (true)
-		{
-			MEMORY_BASIC_INFORMATION info;
-			uintptr_t vAddress;
-
-			// Dereference Pointer
-			if (!Utils::MemoryObj->Is64Bit)
-				vAddress = Utils::MemoryObj->ReadInt(vTableAddress + (methodCount * ptrSize));
-			else
-				vAddress = Utils::MemoryObj->ReadInt64(vTableAddress + (methodCount * ptrSize));
-
-			// Check valid address
-			auto res = VirtualQueryEx(Utils::MemoryObj->ProcessHandle, LPVOID(vAddress), &info, sizeof info);
-			if (res == 0 || (info.Protect != PAGE_EXECUTE_READWRITE && info.Protect != PAGE_EXECUTE_READ))
-				break;
-
-			vTable.push_back(vAddress);
-			++methodCount;
 		}
 
-		for (auto&& pattern : patterns)
+		GenerateMethods(classObj, c.Methods);
+
+		//search virtual functions
+		IGenerator::VirtualFunctionPatterns patterns;
+		if (generator->GetVirtualFunctionPatterns(c.FullName, patterns))
 		{
-			for (auto i = 0u; i < methodCount; ++i)
+			int ptrSize = Utils::PointerSize();
+			uintptr_t vTableAddress = classObj.Object.VfTable;
+			std::vector<uintptr_t> vTable;
+
+			size_t methodCount = 0;
+			while (true)
 			{
-				if (vTable[i] != 0)
+				MEMORY_BASIC_INFORMATION info;
+				uintptr_t vAddress;
+
+				// Dereference Pointer
+				if (!Utils::MemoryObj->Is64Bit)
+					vAddress = Utils::MemoryObj->ReadInt(vTableAddress + (methodCount * ptrSize));
+				else
+					vAddress = Utils::MemoryObj->ReadInt64(vTableAddress + (methodCount * ptrSize));
+
+				// Check valid address
+				auto res = VirtualQueryEx(Utils::MemoryObj->ProcessHandle, LPVOID(vAddress), &info, sizeof info);
+				if (res == 0 || (info.Protect != PAGE_EXECUTE_READWRITE && info.Protect != PAGE_EXECUTE_READ))
+					break;
+
+				vTable.push_back(vAddress);
+				++methodCount;
+			}
+
+			for (auto&& pattern : patterns)
+			{
+				for (auto i = 0u; i < methodCount; ++i)
 				{
-					auto scanResult = PatternScan::FindPattern(Utils::MemoryObj, vTable[i], vTable[i] + 0x200, { std::get<0>(pattern) }, true);
-					auto toFind = scanResult.find(std::get<0>(pattern).Name);
-					if (toFind != scanResult.end() && !toFind->second.empty())
+					if (vTable[i] != 0)
 					{
-						c.PredefinedMethods.push_back(IGenerator::PredefinedMethod::Inline(tfm::format(std::get<1>(pattern), i)));
-						break;
+						auto scanResult = PatternScan::FindPattern(Utils::MemoryObj, vTable[i], vTable[i] + 0x200, { std::get<0>(pattern) }, true);
+						auto toFind = scanResult.find(std::get<0>(pattern).Name);
+						if (toFind != scanResult.end() && !toFind->second.empty())
+						{
+							c.PredefinedMethods.push_back(IGenerator::PredefinedMethod::Inline(tfm::format(std::get<1>(pattern), i)));
+							break;
+						}
 					}
 				}
 			}

@@ -9,6 +9,8 @@ struct MySettings
 	struct _SdkGenSettings
 	{
 		std::string CorePackageName;
+		std::string MemoryHeader;
+		std::string MemoryRead;
 		int Threads = 0;
 		bool DumpObjects = false;
 		bool DumpNames = false;
@@ -80,7 +82,7 @@ public:
 	template <typename ElementType>
 	static void FixPointers(ElementType* structBase, const int fullStructSize, std::vector<int> varsOffsets)
 	{
-		if (Utils::ProgramIs64() && MemoryObj->Is64Bit)
+		if (ProgramIs64() && MemoryObj->Is64Bit)
 			return;
 
 		for (int varOff : varsOffsets)
