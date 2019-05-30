@@ -26,9 +26,7 @@ void PrintFileHeader(std::ostream& os, const std::vector<std::string>& includes,
 	}
 
 	if (!generator->GetNamespaceName().empty())
-	{
 		os << "namespace " << generator->GetNamespaceName() << "\n{\n";
-	}
 }
 
 void PrintFileHeader(std::ostream& os, bool isHeaderFile)
@@ -52,7 +50,7 @@ void PrintFileFooter(std::ostream& os)
 
 void PrintSectionHeader(std::ostream& os, const char* name)
 {
-	os << "//---------------------------------------------------------------------------\n"
+	os  << "//---------------------------------------------------------------------------\n"
 		<< "// " << name << "\n"
 		<< "//---------------------------------------------------------------------------\n\n";
 }
@@ -65,16 +63,16 @@ std::string GenerateFileName(FileContentType type, const Package& package)
 	switch (type)
 	{
 	case FileContentType::Structs:
-		name = "%s_structs.hpp";
+		name = "%s_structs.h";
 		break;
 	case FileContentType::Classes:
-		name = "%s_classes.hpp";
+		name = "%s_classes.h";
 		break;
 	case FileContentType::Functions:
 		name = "%s_functions.cpp";
 		break;
 	case FileContentType::FunctionParameters:
-		name = "%s_parameters.hpp";
+		name = "%s_parameters.h";
 		break;
 	default:
 		assert(false);
