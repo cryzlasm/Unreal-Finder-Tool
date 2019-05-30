@@ -414,7 +414,6 @@ void MainUi(UiWindow& thiz)
 
 			ui::EndTabBar();
 		}
-		
 	}
 }
 
