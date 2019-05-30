@@ -6,7 +6,7 @@ Useful tool to help you fetch and dump Unreal Engine 4 Games information.
 - **Find GNames**.
 - **Find GObjects**.
 - **Instance Logger**.
-- **Sdk Generator**. *Based on @KN4CK3R* (**External**, **Some improvment** and **Multi-thread**)
+- **Sdk Generator**. *Based on @KN4CK3R* (**External**, **light**, **Faster** and **Multi-thread**)
 - **Kenrnal to read process memory**. [Based on @harakirinox](https://www.unknowncheats.me/forum/anti-cheat-bypass/312791-bypaph-process-hackers-bypass-read-write-process-virtual-memory-kernel-mem.html)
 - **Dynamic JSON Reflector structs**. (**Read struct from JSON files to fit all games structs. *(just edit and run)***)
 
@@ -33,6 +33,12 @@ Download last version from [Here](https://github.com/CorrM/Unreal-Finder-Tool/re
 - Some Indie games. (64bit / 32bit)
 
 # Change Log
+##### 30-06-2019
+- Add new settings.
+- Add `Game Name`, `Game Version` to `Sdk Generator`.
+- Add `Sdk Type` to `Sdk Generator`. (**Internal**, **External**)
+- Some Optimization.
+
 ##### 28-06-2019
 - Add UI.
 - Some changes to `SDK Generator` and `Instance Logger`.
