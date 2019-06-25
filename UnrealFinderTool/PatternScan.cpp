@@ -1,7 +1,7 @@
 #include "pch.h"
-#include "Utils.h"
 #include "Memory.h"
 #include "PatternScan.h"
+#include "ParallelWorker.h"
 
 #include <future>
 
@@ -40,18 +40,11 @@ Pattern PatternScan::Parse(const std::string& name, const int offset, const std:
 	return Parse(name, offset, patternStr, wildcard, " ");
 }
 
-/**
- * \brief Scan pattern of memory in process memory
- * \param mem Handle to process
- * \param dwStart Starting memory address
- * \param dwEnd How many bytes to read
- * \param patterns Attempt to match this pattern
- * \param firstOnly Get first address only
- * \return uintptr_t
- */
-std::map<string, std::vector<uintptr_t>> PatternScan::FindPattern(Memory* mem, uintptr_t dwStart, uintptr_t dwEnd, std::vector<Pattern> patterns, const bool firstOnly)
+PatternScanResult PatternScan::FindPattern(Memory* mem, uintptr_t dwStart, uintptr_t dwEnd, std::vector<Pattern> patterns,
+	const bool firstOnly, const bool useThreads)
 {
-	std::map<string, std::vector<uintptr_t>> ret;
+	std::vector<RegionHolder> mem_regions;
+	PatternScanResult ret;
 	std::vector<uintptr_t> result;
 
 	// Init map
@@ -67,58 +60,139 @@ std::map<string, std::vector<uintptr_t>> PatternScan::FindPattern(Memory* mem, u
 	if (dwEnd > reinterpret_cast<uintptr_t>(si.lpMaximumApplicationAddress) || dwEnd == 0)
 		dwEnd = reinterpret_cast<uintptr_t>(si.lpMaximumApplicationAddress);
 
-	MEMORY_BASIC_INFORMATION info;
+	MEMORY_BASIC_INFORMATION info = { 0 };
 
 	// Cycle through memory based on RegionSize
-	for (uintptr_t i = dwStart; (VirtualQueryEx(mem->ProcessHandle, LPVOID(i), &info, sizeof info) == sizeof info && i < dwEnd); i += info.RegionSize)
 	{
-		// Bad Memory
-		if (info.State != MEM_COMMIT) continue;
-		if (info.Type != MEM_PRIVATE) continue;
-		if (info.Protect != PAGE_READWRITE) continue;
+		uintptr_t currentAddress = dwStart;
+		bool exitLoop = false;
 
-		SIZE_T allocCount = (dwEnd - dwStart) > info.RegionSize ? info.RegionSize : dwEnd - dwStart;
-		const auto pBuf = static_cast<PBYTE>(malloc(allocCount));
-
-		// Read one page or skip if failed
-		const SIZE_T dwOut = mem->ReadBytes(i, pBuf, allocCount);
-		if (dwOut == 0)
+		do
 		{
-			free(pBuf);
-			continue;
-		}
+			// Get Region information
+			exitLoop = !(VirtualQueryEx(mem->ProcessHandle, reinterpret_cast<LPVOID>(currentAddress), &info, sizeof info) == sizeof info && currentAddress < dwEnd);
 
-		// Scan for all pattern in the same memory region
-		for (auto& pattern : patterns)
-		{
-			int k = 0;
-			const uchar_t *uPattern = pattern.Sig.data();
-			const auto nLen = pattern.Len;
-			
-			for (int j = 0; j <= dwOut; j++)
+			// Size will used to alloc and read memory
+			const size_t allocSize = dwEnd - dwStart >= info.RegionSize ? info.RegionSize : dwEnd - dwStart;
+
+			// Bad Memory
+			if (!(info.State & MEM_COMMIT) || info.Protect & (PAGE_NOACCESS | PAGE_WRITECOPY | PAGE_TARGETS_INVALID))
 			{
-				// If the byte matches our pattern or wildcard
-				if (pBuf[j] == uPattern[k] || uPattern[k] == pattern.Wildcard)
-				{
-					// Did we find it?
-					if (++k == nLen)
-					{
-						// Our match function places us at the begin of the pattern
-						// To locate the pointer we need to subtract nOffset bytes
-						ret.find(pattern.Name)->second.push_back(i + j - (nLen - 1) + pattern.Offset);
+				// Get next address
+				currentAddress += allocSize;
+				continue;
+			}
 
-						if (firstOnly)
-							break;
+			// Insert region information on Regions Holder
+			mem_regions.emplace_back(currentAddress, allocSize);
+
+			// Get next address
+			currentAddress += allocSize;
+
+		} while (!exitLoop);
+	}
+	
+	if (useThreads)
+	{
+		ParallelQueue<std::vector<RegionHolder>, RegionHolder> 
+		worker(mem_regions, 0, Utils::Settings.SdkGen.Threads, [&](RegionHolder& memRegion, ParallelOptions& options)
+		{
+			const auto pBuf = new BYTE[memRegion.second];
+
+			// Read one page or skip if failed
+			const size_t dwOut = mem->ReadBytes(memRegion.first, pBuf, memRegion.second);
+			if (dwOut == 0)
+			{
+				delete[] pBuf;
+			}
+			else
+			{
+				// Scan for all pattern in the same memory region
+				for (auto& pattern : patterns)
+				{
+					size_t k = 0;
+					const uchar_t* uPattern = pattern.Sig.data();
+					const auto nLen = pattern.Len;
+
+					for (size_t j = 0; j <= dwOut; j++)
+					{
+						// If the byte matches our pattern or wildcard
+						if (pBuf[j] == uPattern[k] || uPattern[k] == pattern.Wildcard)
+						{
+							// Did we find it?
+							if (++k == nLen)
+							{
+								// Our match function places us at the begin of the pattern
+								// To locate the pointer we need to subtract nOffset bytes
+								std::lock_guard lock(options.Locker);
+								ret.find(pattern.Name)->second.push_back(memRegion.first + j - (nLen - 1) + pattern.Offset);
+								if (firstOnly)
+								{
+									options.ForceStop = true;
+									break;
+								}
+							}
+						}
+						else
+						{
+							k = 0;
+						}
 					}
 				}
-				else
+
+				delete[] pBuf;
+			}
+		});
+
+		worker.Start();
+		worker.WaitAll();
+	}
+	else
+	{
+		for (RegionHolder memRegion : mem_regions)
+		{
+			const auto pBuf = new BYTE[memRegion.second];
+
+			// Read one page or skip if failed
+			const SIZE_T dwOut = mem->ReadBytes(memRegion.first, pBuf, memRegion.second);
+			if (dwOut == 0)
+			{
+				delete[] pBuf;
+				continue;
+			}
+
+			// Scan for all pattern in the same memory region
+			for (auto& pattern : patterns)
+			{
+				size_t k = 0;
+				const uchar_t* uPattern = pattern.Sig.data();
+				const auto nLen = pattern.Len;
+
+				for (size_t j = 0; j <= dwOut; j++)
 				{
-					k = 0;
+					// If the byte matches our pattern or wildcard
+					if (pBuf[j] == uPattern[k] || uPattern[k] == pattern.Wildcard)
+					{
+						// Did we find it?
+						if (++k == nLen)
+						{
+							// Our match function places us at the begin of the pattern
+							// To locate the pointer we need to subtract nOffset bytes
+							ret.find(pattern.Name)->second.push_back(memRegion.first + j - (nLen - 1) + pattern.Offset);
+
+							if (firstOnly)
+								break;
+						}
+					}
+					else
+					{
+						k = 0;
+					}
 				}
 			}
-		}
 
-		free(pBuf);
+			delete[] pBuf;
+		}
 	}
 
 	return ret;

@@ -1,38 +1,29 @@
 #include "pch.h"
-#include "NamesStore.h"
-#include "Utils.h"
 #include "Memory.h"
+#include "NamesStore.h"
 
-GName* NamesStore::gNames;
-int NamesStore::gNamesChunkCount;
+std::vector<FNameEntity> NamesStore::gNames;
+int NamesStore::chunkCount = 16384;
 int NamesStore::gNamesChunks;
 uintptr_t NamesStore::gNamesAddress;
 
 #pragma region NamesStore
-bool NamesStore::Initialize(const uintptr_t gNamesAddress)
+bool NamesStore::Initialize(const uintptr_t gNamesAddress, const bool forceReInit)
 {
+	if (!forceReInit && NamesStore::gNamesAddress != NULL)
+		return true;
+
+	gNames.clear();
+	gNamesChunks = 0;
+
 	NamesStore::gNamesAddress = gNamesAddress;
-	NamesStore::gNamesChunkCount = 16384;
-	return FetchData();
-}
-
-bool NamesStore::FetchData()
-{
-	// GNames
-	if (!ReadGNameArray(gNamesAddress))
-	{
-		std::cout << red << "[*] " << def << "Invalid GNames Address." << std::endl << def;
-		return false;
-	}
-
-	return true;
+	return ReadGNameArray(gNamesAddress);
 }
 
 bool NamesStore::ReadGNameArray(const uintptr_t address)
 {
 	int ptrSize = Utils::PointerSize();
 	size_t nameOffset = 0;
-	JsonStruct fName;
 
 	// Get GNames Chunks
 	std::vector<uintptr_t> gChunks;
@@ -47,9 +38,6 @@ bool NamesStore::ReadGNameArray(const uintptr_t address)
 		gChunks.push_back(addr);
 		gNamesChunks++;
 	}
-
-	// Alloc Size
-	gNames = new GName[gNamesChunkCount * gNamesChunks];
 
 	// Calc AnsiName offset
 	{
@@ -66,25 +54,27 @@ bool NamesStore::ReadGNameArray(const uintptr_t address)
 	int i = 0;
 	for (uintptr_t chunkAddress : gChunks)
 	{
-		for (int j = 0; j < gNamesChunkCount; ++j)
+		for (int j = 0; j < chunkCount; ++j)
 		{
+			FNameEntity tmp;
 			const int offset = ptrSize * j;
 			uintptr_t fNameAddress = Utils::MemoryObj->ReadAddress(chunkAddress + offset);
 
 			if (!IsValidAddress(fNameAddress))
 			{
-				gNames[i].Index = i;
-				gNames[i].AnsiName = "";
+				// Push Empty, if i just skip will case a problems, so just add empty item
+				tmp.Index = i + 1; // FNameEntity Index look like that 0 .. 2 .. 4 .. 6
+				tmp.AnsiName = "";
+
+				gNames.push_back(std::move(tmp));
 				++i;
 				continue;
 			}
 
 			// Read FName
-			if (!fName.ReadData(fNameAddress, "FNameEntity")) return false;
+			if (!tmp.ReadData(fNameAddress, nameOffset)) return false;
 
-			// Set The Name
-			gNames[i].Index = i;
-			gNames[i].AnsiName = Utils::MemoryObj->ReadText(fNameAddress + nameOffset);
+			gNames.push_back(std::move(tmp));
 			++i;
 		}
 	}
@@ -110,29 +100,41 @@ bool NamesStore::IsValidAddress(const uintptr_t address)
 	return false;
 }
 
-void* NamesStore::GetAddress()
+uintptr_t NamesStore::GetAddress()
 {
-	return reinterpret_cast<void*>(gNamesAddress);
+	return gNamesAddress;
 }
 
 size_t NamesStore::GetNamesNum() const
 {
-	int num = gNamesChunkCount * gNamesChunks;
-	return size_t(num);
+	return chunkCount * gNamesChunks;
 }
 
 bool NamesStore::IsValid(const size_t id)
 {
-	return id >= 0 && id <= GetNamesNum() && !GetById(id).empty();
+	return id >= 0 && id <= GetNamesNum() && !GetByIndex(id).empty();
 }
 
-std::string NamesStore::GetById(const size_t id)
+std::string NamesStore::GetByIndex(const size_t id)
 {
 	// TODO: i think here is a problem, set BP at (return "") and check call stack. (why wrong id)
 	if (id > GetNamesNum())
 		return "";
 
 	return gNames[id].AnsiName;
+}
+
+int NamesStore::GetByName(const std::string& name)
+{
+	auto retIt = std::find_if(gNames.begin(), gNames.end(), [&](FNameEntity& fName) -> bool
+	{
+		return fName.AnsiName == name;
+	});
+
+	if (retIt == gNames.end())
+		return -1;
+
+	return std::distance(gNames.begin(), retIt);
 }
 #pragma endregion
 
@@ -203,13 +205,13 @@ bool NamesIterator::operator!=(const NamesIterator& rhs) const
 	return index != rhs.index;
 }
 
-GName NamesIterator::operator*() const
+FNameEntity NamesIterator::operator*() const
 {
-	return { index, NamesStore(store).GetById(index) };
+	return NamesStore::gNames[index];
 }
 
-GName NamesIterator::operator->() const
+FNameEntity NamesIterator::operator->() const
 {
-	return { index, NamesStore(store).GetById(index) };
+	return NamesStore::gNames[index];
 }
 #pragma endregion

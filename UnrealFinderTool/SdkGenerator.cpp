@@ -1,25 +1,23 @@
 #include "pch.h"
-#include "Memory.h"
 #include "cpplinq.hpp"
 #include "NameValidator.h"
 #include "PrintHelper.h"
 #include "Logger.h"
 #include "ObjectsStore.h"
 #include "NamesStore.h"
-#include "JsonReflector.h"
 #include "SdkGenerator.h"
 
+#include <cinttypes>
 #include <fstream>
 #include <chrono>
 #include <bitset>
 #include <unordered_set>
 #include <tlhelp32.h>
-#include <bitset>
 #include "ParallelWorker.h"
 
 extern IGenerator* generator;
 
-// TODO: Optimize `UEObject::GetNameCPP` and `UEObject::IsA()` and `ObjectsStore().CountObjects` and `ObjectsStore::FindClass`
+// ToDo: Instated of crash just popup a msg that's tell the user to use another GObjects address
 
 SdkGenerator::SdkGenerator(const uintptr_t gObjAddress, const uintptr_t gNamesAddress) :
 	gObjAddress(gObjAddress),
@@ -27,47 +25,39 @@ SdkGenerator::SdkGenerator(const uintptr_t gObjAddress, const uintptr_t gNamesAd
 {
 }
 
-GeneratorState SdkGenerator::Start(int* pObjCount, int* pNamesCount, int* pPackagesCount, int* pPackagesDone, std::string& state, std::vector<std::string>& packagesDone)
+SdkInfo SdkGenerator::Start(size_t* pObjCount, size_t* pNamesCount, size_t* pPackagesCount, size_t* pPackagesDone,
+								   const std::string& gameName, const std::string& gameVersion, const SdkType sdkType,
+								   std::string& state, std::vector<std::string>& packagesDone)
 {
 	// Check Address
 	if (!Utils::IsValidGNamesAddress(gNamesAddress))
-	{
-		return GeneratorState::BadGName;
-	}
+		return { GeneratorState::BadGName };
 	if (!Utils::IsValidGObjectsAddress(gObjAddress))
-	{
-		return GeneratorState::BadGObject;
-	}
-
-	// Dump GObjects
-	if (!ObjectsStore::Initialize(gObjAddress))
-	{
-		return GeneratorState::BadGObject;
-	}
-	*pObjCount = ObjectsStore().GetObjectsNum();
+		return { GeneratorState::BadGObject };
 
 	// Dump GNames
 	if (!NamesStore::Initialize(gNamesAddress))
-	{
-		return GeneratorState::BadGName;
-	}
+		return { GeneratorState::BadGName };
 	*pNamesCount = NamesStore().GetNamesNum();
+
+	// Dump GObjects
+	if (!ObjectsStore::Initialize(gObjAddress))
+		return { GeneratorState::BadGObject };
+	*pObjCount = ObjectsStore().GetObjectsNum();
 
 	// Init Generator Settings
 	if (!generator->Initialize())
 	{
 		MessageBoxA(nullptr, "Initialize failed", "Error", 0);
-		return GeneratorState::Bad;
+		return { GeneratorState::Bad };
 	}
+	generator->SetGameName(gameName);
+	generator->SetGameVersion(gameVersion);
+	generator->SetSdkType(sdkType);
+	generator->SetIsGObjectsChunks(ObjectsStore::GInfo.IsChunksAddress);
 
 	// Get Current Dir
-	char buffer[2048];
-	if (GetModuleFileNameA(GetModuleHandle(nullptr), buffer, sizeof(buffer)) == 0)
-	{
-		MessageBoxA(nullptr, "GetModuleFileName failed", "Error", 0);
-		return GeneratorState::Bad;
-	}
-	fs::path outputDirectory = fs::path(buffer).remove_filename();
+	fs::path outputDirectory = fs::path(Utils::GetWorkingDirectory());
 
 	outputDirectory /= "Results";
 	fs::create_directories(outputDirectory);
@@ -76,50 +66,71 @@ GeneratorState SdkGenerator::Start(int* pObjCount, int* pNamesCount, int* pPacka
 	Logger::SetStream(&log);
 
 	fs::create_directories(outputDirectory);
+	state = "Dumping (GNames/GObjects).";
 
 	// Dump To Files
 	if (generator->ShouldDumpArrays())
 	{
-		Dump(outputDirectory);
-		state = "Dump (GNames/GObjects) Done";
+		Dump(outputDirectory, state);
+		state = "Dump (GNames/GObjects) Done.";
+		Sleep(2 * 1000);
 	}
 
 	// Dump Packages
 	const auto begin = std::chrono::system_clock::now();
 	ProcessPackages(outputDirectory, pPackagesCount, pPackagesDone, state, packagesDone);
-	
-	Logger::Log("Finished, took %d seconds.", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - begin).count());
+
+	// Get Time
+	std::time_t took_seconds = std::time_t(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - begin).count());
+	std::tm took_time;
+	gmtime_s(&took_time, &took_seconds);
+
+	Logger::Log("Finished, took %d seconds.", took_seconds);
 	Logger::SetStream(nullptr);
-	
-	return GeneratorState::Good;
+
+	return { GeneratorState::Good, took_time };
 }
 
 /// <summary>
 /// Dumps the objects and names to files.
 /// </summary>
 /// <param name="path">The path where to create the dumps.</param>
-void SdkGenerator::Dump(const fs::path& path)
+/// <param name="state"></param>
+void SdkGenerator::Dump(const fs::path& path, std::string& state)
 {
-	if (Utils::Settings.SdkGen.DumpObjects)
+	if (Utils::Settings.SdkGen.DumpNames)
 	{
-		std::ofstream o(path / "ObjectsDump.txt");
-		tfm::format(o, "Address: 0x%P\n\n", ObjectsStore::GetAddress());
+		state = "Dumping Names.";
 
-		for (const auto& obj : ObjectsStore())
+		std::ofstream o(path / "NamesDump.txt");
+		tfm::format(o, "Address: 0x%" PRIXPTR "\n\n", NamesStore::GetAddress());
+
+		size_t vecSize = NamesStore().GetNamesNum();
+		for (size_t i = 0; i < vecSize; ++i)
 		{
-			if (obj.IsValid())
-				tfm::format(o, "[%06i] %-100s 0x%P\n", obj.GetIndex(), obj.GetFullName(), obj.GetAddress());
+			std::string str = NamesStore().GetByIndex(i);
+			if (!str.empty())
+				tfm::format(o, "[%06i] %s\n", int(i), NamesStore().GetByIndex(i).c_str());
+			state = "Names [ " + std::to_string(i) + " / " + std::to_string(vecSize) + " ].";
 		}
 	}
 
-	if (Utils::Settings.SdkGen.DumpNames)
+	if (Utils::Settings.SdkGen.DumpObjects)
 	{
-		std::ofstream o(path / "NamesDump.txt");
-		tfm::format(o, "Address: 0x%P\n\n", NamesStore::GetAddress());
+		state = "Dumping Objects.";
 
-		for (const auto& name : NamesStore())
+		std::ofstream o(path / "ObjectsDump.txt");
+		tfm::format(o, "Address: 0x%" PRIXPTR "\n\n", ObjectsStore::GInfo.GObjAddress);
+
+		size_t vecSize = ObjectsStore().GetObjectsNum();
+		for (size_t i = 0; i < vecSize; ++i)
 		{
-			tfm::format(o, "[%06i] %s\n", name.Index, name.AnsiName);
+			if (ObjectsStore().GetByIndex(i)->IsValid())
+			{
+				const UEObject* obj = ObjectsStore().GetByIndex(i);
+				tfm::format(o, "[%06i] %-100s 0x%" PRIXPTR "\n", obj->GetIndex(), obj->GetFullName(), obj->GetAddress());
+			}
+			state = "Objects [ " + std::to_string(i) + " / " + std::to_string(vecSize) + " ].";
 		}
 	}
 }
@@ -132,24 +143,55 @@ void SdkGenerator::Dump(const fs::path& path)
 /// <param name="pPackagesDone"></param>
 /// <param name="state"></param>
 /// <param name="packagesDone"></param>
-void SdkGenerator::ProcessPackages(const fs::path& path, int* pPackagesCount, int* pPackagesDone, std::string& state, std::vector<std::string>& packagesDone)
+void SdkGenerator::ProcessPackages(const fs::path& path, size_t* pPackagesCount, size_t* pPackagesDone, std::string& state, std::vector<std::string>& packagesDone)
 {
-	using namespace cpplinq;
-
 	int threadCount = Utils::Settings.SdkGen.Threads;
 	const auto sdkPath = path / "SDK";
 	fs::create_directories(sdkPath);
-
+	
 	std::vector<std::unique_ptr<Package>> packages;
-	std::unordered_map<UEObject, bool> processedObjects;
+	std::unordered_map<uintptr_t, bool> processedObjects;
 
-	auto packageObjects =
-		from(ObjectsStore())
-		>> select([](auto && o) { return o.GetPackageObject(); })
-		>> where([](auto && o) { return o.IsValid(); })
-		>> distinct()
-		>> to_vector();
+	state = "Start Collecting Packages.";
+	std::vector<UEObject*> packageObjects;
 
+	// Collecting Packages
+	{
+		size_t index = 0;
+		ParallelSingleShot worker(threadCount, [&](ParallelOptions& options)
+		{
+			size_t vecSize = ObjectsStore::GObjObjects.size();
+			while (vecSize > index)
+			{
+				UEObject* curObj;
+				// Get current object
+				{
+					std::lock_guard lock(options.Locker);
+					curObj = ObjectsStore::GObjObjects[index].second.get();
+					++index;
+				}
+
+				if (!curObj)
+					continue;
+
+				UEObject* package = curObj->GetPackageObject();
+				if (package->IsValid())
+				{
+					std::lock_guard lock(options.Locker);
+					packageObjects.push_back(package);
+					state = "Progress [ " + std::to_string(index) + " / " + std::to_string(vecSize) + " ].";
+				}
+			}
+		});
+		worker.Start();
+		worker.WaitAll();
+
+		// Make vector distinct
+		std::sort(packageObjects.begin(), packageObjects.end());
+		packageObjects.erase(std::unique(packageObjects.begin(), packageObjects.end()), packageObjects.end());
+	}
+
+	state = "Getting Packages Done.";
 	*pPackagesCount = packageObjects.size();
 
 	/*
@@ -160,52 +202,56 @@ void SdkGenerator::ProcessPackages(const fs::path& path, int* pPackagesCount, in
 	*/
 	{
 		state = "Dumping '" + Utils::Settings.SdkGen.CorePackageName + "'.";
-		const UEObject& obj = packageObjects[0];
 
-		auto package = std::make_unique<Package>(obj);
-		package->Process(processedObjects);
+		// Get CoreUObject, Some times CoreUObject not the first Package
+		UEObject* coreUObject;
+		for (auto& pack : packageObjects)
+		{
+			if (pack->GetName() == Utils::Settings.SdkGen.CorePackageName)
+				coreUObject = pack;
+		}
+
+		auto package = std::make_unique<Package>(coreUObject);
+		std::mutex tmp_lock;
+		package->Process(processedObjects, tmp_lock);
 		if (package->Save(sdkPath))
 		{
-			packagesDone.emplace_back(std::string("(") + std::to_string(0) + ") " + package->GetName() + " [ "
+			packagesDone.emplace_back(std::string("(") + std::to_string(1) + ") " + package->GetName() + " [ "
 				"C: " + std::to_string(package->Classes.size()) + ", " +
 				"S: " + std::to_string(package->ScriptStructs.size()) + ", " +
 				"E: " + std::to_string(package->Enums.size()) + " ]"
 			);
 
-			Package::PackageMap[obj] = package.get();
+			Package::PackageMap[*coreUObject] = package.get();
 			packages.emplace_back(std::move(package));
 		}
 
 		// Set Sleep Every
-		Utils::Settings.Parallel.SleepEvery = 50;
+		Utils::Settings.Parallel.SleepEvery = 30;
 	}
 
-	state = "Dumping Packages with " + std::to_string(threadCount) + " Threads.";
+	++*pPackagesDone;
+	state = "Dumping with " + std::to_string(threadCount) + " Threads.";
 
-	*pPackagesDone = 1;
 	// Start From 1 because core package is already done
-	ParallelWorker<UEObject> packageProcess(packageObjects, 1, threadCount, [&](const UEObject& obj, std::mutex & gMutex)
+	ParallelQueue<std::vector<UEObject*>, UEObject*>packageProcess(packageObjects, 1, threadCount, [&](UEObject* obj, ParallelOptions& options)
 	{
 		auto package = std::make_unique<Package>(obj);
-		package->Process(processedObjects);
+		package->Process(processedObjects, Utils::MainMutex);
+		
+		std::lock_guard lock(Utils::MainMutex);
+		++*pPackagesDone;
+
+		packagesDone.emplace_back(std::string("(") + std::to_string(*pPackagesDone) + ") " + package->GetName() + " [ "
+			"C: " + std::to_string(package->Classes.size()) + ", " +
+			"S: " + std::to_string(package->ScriptStructs.size()) + ", " +
+			"E: " + std::to_string(package->Enums.size()) + " ]"
+		);
+
 		if (package->Save(sdkPath))
 		{
-			{
-				std::lock_guard lock(gMutex);
-				packagesDone.emplace_back(std::string("(") + std::to_string(*pPackagesDone) + ") " + package->GetName() + " [ "
-					"C: " + std::to_string(package->Classes.size()) + ", " +
-					"S: " + std::to_string(package->ScriptStructs.size()) + ", " +
-					"E: " + std::to_string(package->Enums.size()) + " ]"
-				);
-			}
-
-			Package::PackageMap[obj] = package.get();
+			Package::PackageMap[*obj] = package.get();
 			packages.emplace_back(std::move(package));
-		}
-
-		{
-			std::lock_guard lock(gMutex);
-			++*pPackagesDone;
 		}
 	});
 	packageProcess.Start();
@@ -237,12 +283,15 @@ void SdkGenerator::ProcessPackages(const fs::path& path, int* pPackagesCount, in
 /// <param name="path">The path where to create the sdk header.</param>
 /// <param name="processedObjects">The list of processed objects.</param>
 /// <param name="packages">The package order info.</param>
-void SdkGenerator::SaveSdkHeader(const fs::path& path, const std::unordered_map<UEObject, bool>& processedObjects, const std::vector<std::unique_ptr<Package>>& packages)
+void SdkGenerator::SaveSdkHeader(const fs::path& path, const std::unordered_map<uintptr_t, bool>& processedObjects, const std::vector<std::unique_ptr<Package>>& packages)
 {
-	std::ofstream os(path / "SDK.hpp");
+	std::ofstream os(path / "SDK.h");
+	os << "// ------------------------------------------------\n";
+	os << "// Sdk Generated By ( Unreal Finder Tool By CorrM )\n";
+	os << "// ------------------------------------------------\n";
 
 	os << "#pragma once\n\n"
-		<< tfm::format("// %s SDK\n\n", generator->GetGameName());
+		<< tfm::format("// Name: %s, Version: %s\n\n", generator->GetGameName(), generator->GetGameVersion());
 
 	//Includes
 	os << "#include <set>\n";
@@ -255,20 +304,18 @@ void SdkGenerator::SaveSdkHeader(const fs::path& path, const std::unordered_map<
 	//include the basics
 	{
 		{
-			std::ofstream os2(path / "SDK" / tfm::format("Basic.hpp"));
-
-			PrintFileHeader(os2, true);
-
+			std::ofstream os2(path / "SDK" / tfm::format("Basic.h"));
+			PrintFileHeader(os2, { "warning(disable: 4267)" }, { "<vector>", "<locale>", "<set>" }, true);
 			os2 << generator->GetBasicDeclarations() << "\n";
-
 			PrintFileFooter(os2);
 
-			os << "\n#include \"SDK/" << tfm::format("Basic.hpp") << "\"\n";
+			// Add basics to SDK.h
+			os << "\n#include \"SDK/" << tfm::format("Basic.h") << "\"\n";
 		}
 		{
 			std::ofstream os2(path / "SDK" / tfm::format("Basic.cpp"));
 
-			PrintFileHeader(os2, { "\"../SDK.hpp\"" }, false);
+			PrintFileHeader(os2, { "\"../SDK.h\"", "<Windows.h>" }, false);
 
 			os2 << generator->GetBasicDefinitions() << "\n";
 
@@ -279,25 +326,25 @@ void SdkGenerator::SaveSdkHeader(const fs::path& path, const std::unordered_map<
 	using namespace cpplinq;
 
 	//check for missing structs
-	const auto missing = from(processedObjects) >> where([](auto && kv) { return kv.second == false; });
+	const auto missing = from(processedObjects) >> where([](std::pair<uintptr_t, bool>&& kv) { return !kv.second; });
 	if (missing >> any())
 	{
-		std::ofstream os2(path / "SDK" / tfm::format("MISSING.hpp"));
+		std::ofstream os2(path / "SDK" / tfm::format("MISSING.h"));
 
 		PrintFileHeader(os2, true);
 
-		for (auto&& s : missing >> select([](auto && kv) { return kv.first.Cast<UEStruct>(); }) >> experimental::container())
+		for (UEStruct&& s : missing >> select([](std::pair<uintptr_t, bool>&& kv) { return ObjectsStore::GetByAddress(kv.first)->Cast<UEStruct>(); }) >> experimental::container())
 		{
 			os2 << "// " << s.GetFullName() << "\n// ";
 			os2 << tfm::format("0x%04X\n", s.GetPropertySize());
 
-			os2 << "struct " << MakeValidName(s.GetNameCPP()) << "\n{\n";
+			os2 << "struct " << MakeValidName(s.GetNameCpp()) << "\n{\n";
 			os2 << "\tunsigned char UnknownData[0x" << tfm::format("%X", s.GetPropertySize()) << "];\n};\n\n";
 		}
 
 		PrintFileFooter(os2);
 
-		os << "\n#include \"SDK/" << tfm::format("MISSING.hpp") << "\"\n";
+		os << "\n#include \"SDK/" << tfm::format("MISSING.h") << "\"\n";
 	}
 
 	os << "\n";
@@ -311,26 +358,4 @@ void SdkGenerator::SaveSdkHeader(const fs::path& path, const std::unordered_map<
 			os << R"(#include "SDK/)" << GenerateFileName(FileContentType::FunctionParameters, *package) << "\"\n";
 		}
 	}
-}
-
-uintptr_t SdkGenerator::GetModuleBase(const DWORD processId, const LPSTR lpModuleName, int* sizeOut)
-{
-	MODULEENTRY32 lpModuleEntry = { 0 };
-	HANDLE hSnapShot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, processId);
-	if (!hSnapShot)
-		return NULL;
-	lpModuleEntry.dwSize = sizeof(lpModuleEntry);
-	BOOL bModule = Module32First(hSnapShot, &lpModuleEntry);
-	while (bModule)
-	{
-		if (_stricmp(lpModuleEntry.szModule, lpModuleName) == 0)
-		{
-			CloseHandle(hSnapShot);
-			*sizeOut = lpModuleEntry.modBaseSize;
-			return reinterpret_cast<uintptr_t>(lpModuleEntry.modBaseAddr);
-		}
-		bModule = Module32Next(hSnapShot, &lpModuleEntry);
-	}
-	CloseHandle(hSnapShot);
-	return NULL;
 }

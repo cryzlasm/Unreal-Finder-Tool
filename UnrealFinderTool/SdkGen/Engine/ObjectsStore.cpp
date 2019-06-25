@@ -1,144 +1,188 @@
 #include "pch.h"
 #include "Memory.h"
-#include "SdkGen/EngineClasses.h"
-#include "Utils.h"
 #include "ObjectsStore.h"
+#include "EngineClasses.h"
+#include "NamesStore.h"
 #include <cassert>
 
-std::vector<std::unique_ptr<UEObject>> ObjectsStore::gObjObjects;
-int ObjectsStore::gObjectsCount;
-uintptr_t ObjectsStore::gObjAddress;
-int ObjectsStore::maxZeroAddress = 150;
+GObjectInfo ObjectsStore::GInfo;
+GObjects ObjectsStore::GObjObjects;
 
 #pragma region ObjectsStore
-bool ObjectsStore::Initialize(const uintptr_t gObjAddress)
+bool ObjectsStore::Initialize(const uintptr_t gObjAddress, const bool forceReInit)
 {
-	ObjectsStore::gObjAddress = gObjAddress;
+	ObjectsStore tmp;
+	if (!forceReInit && GInfo.GObjAddress != NULL)
+		return true;
 
-	return FetchData();
+	// Destroy old object's from heap
+	for (size_t i = 0; i < GObjObjects.size(); i++)
+	{
+		delete GObjObjects[i].second->Object;
+		GObjObjects[i].second->Object = nullptr;
+	}
+
+	// Clear
+	GObjObjects.clear();
+	GInfo.Count = 0;
+	GInfo.GObjAddress = gObjAddress;
+
+	return tmp.FetchData();
 }
 
 bool ObjectsStore::FetchData()
 {
-	// GObjects
-	if (!ReadUObjectArray(gObjAddress))
-	{
-		std::cout << red << "[*] " << def << "Invalid GObject Address." << std::endl << def;
-		return false;
-	}
-
-	return true;
+	if (!GetGObjectInfo()) return false;
+	return ReadUObjectArray();
 }
 
-bool ObjectsStore::ReadUObjectArray(const uintptr_t address)
+bool ObjectsStore::GetGObjectInfo()
 {
+	// Check if it's first `UObject` or first `Chunk` address
+	// And Get Chunk and other GObjects info
+	{
+		int skipCount = 0;
+		for (size_t uIndex = 0; uIndex <= 20 && skipCount <= 5; ++uIndex)
+		{
+			uintptr_t curAddress = GInfo.GObjAddress + uIndex * Utils::PointerSize();
+			uintptr_t chunk = Utils::MemoryObj->ReadAddress(curAddress);
+
+			// Skip null address
+			if (chunk == 0)
+			{
+				++skipCount;
+				continue;
+			}
+
+			if (!Utils::IsValidRemoteAddress(Utils::MemoryObj, chunk)) break;
+
+			skipCount = 0;
+			GInfo.GChunks.push_back(chunk);
+			++GInfo.ChunksCount;
+		}
+
+		if (skipCount >= 5)
+		{
+			GInfo.IsChunksAddress = true;
+		}
+		else
+		{
+			GInfo.IsChunksAddress = false;
+			GInfo.GChunks.clear();
+			GInfo.ChunksCount = 1;
+		}
+	}
+
 	// Get Work Method [Pointer Next Pointer or FUObjectItem(Flags, ClusterIndex, etc)]
-	bool isPointerNextPointer = false;
-	uintptr_t obj1 = Utils::MemoryObj->ReadAddress(address);
-	uintptr_t obj2 = Utils::MemoryObj->ReadAddress(address + Utils::PointerSize());
-
-	if (!Utils::IsValidAddress(Utils::MemoryObj, obj1)) return false;
-	// Not Valid mean it's not Pointer Next To Pointer, or GObject address is wrong.
-	isPointerNextPointer = Utils::IsValidAddress(Utils::MemoryObj, obj2);
-
-	return isPointerNextPointer ? ReadUObjectArrayPnP(address) : ReadUObjectArrayNormal(address);
-}
-
-bool ObjectsStore::ReadUObjectArrayPnP(const uintptr_t address)
-{
-	JsonStruct uObject;
-	int skipCount = 0;
-
-	for (size_t uIndex = 0; skipCount <= maxZeroAddress; ++uIndex)
 	{
-		uintptr_t curAddress = address + uIndex * Utils::PointerSize();
-		uintptr_t dwUObject = Utils::MemoryObj->ReadAddress(curAddress);
+		uintptr_t firstUObj = GInfo.IsChunksAddress ? Utils::MemoryObj->ReadAddress(GInfo.GObjAddress) : GInfo.GObjAddress;
+		uintptr_t obj1 = Utils::MemoryObj->ReadAddress(firstUObj);
+		uintptr_t obj2 = Utils::MemoryObj->ReadAddress(firstUObj + Utils::PointerSize());
 
-		// Skip null pointer in GObjects array
-		if (dwUObject == 0)
-		{
-			++skipCount;
-			continue;
-		}
+		if (!Utils::IsValidRemoteAddress(Utils::MemoryObj, obj1)) return false;
 
-		auto curObject = std::make_unique<UEObject>();
-		ReadUObject(dwUObject, uObject, *curObject);
-
-		gObjObjects.push_back(std::move(curObject));
-		++gObjectsCount;
-		skipCount = 0;
+		// Not Valid mean it's not Pointer Next To Pointer, or GObject address is wrong.
+		GInfo.IsPointerNextToPointer = Utils::IsValidRemoteAddress(Utils::MemoryObj, obj2);
 	}
+
 	return true;
 }
 
-bool ObjectsStore::ReadUObjectArrayNormal(const uintptr_t address)
+bool ObjectsStore::ReadUObjectArray()
 {
-	JsonStruct fUObjectItem, uObject;
-	int skipCount = 0;
-	uintptr_t curAddress = 0;
-
-	for (size_t uIndex = 0; skipCount <= maxZeroAddress; ++uIndex)
+	uintptr_t lastObj = NULL;
+	for (int i = 0; i < GInfo.ChunksCount; ++i)
 	{
-		curAddress = address + uIndex * (fUObjectItem.StructSize - fUObjectItem.SubUnNeededSize());
+		size_t skipCount = 0;
+		int offset = i * Utils::PointerSize();
+		uintptr_t chunkAddress = GInfo.IsChunksAddress ? Utils::MemoryObj->ReadAddress(GInfo.GObjAddress + size_t(offset)) : GInfo.GObjAddress;
 
-		// Read the address as struct
-		if (!fUObjectItem.ReadData(curAddress, "FUObjectItem")) return false;
-		auto dwUObject = fUObjectItem["Object"].ReadAs<uintptr_t>();
-
-		// Skip null pointer in GObjects array
-		if (dwUObject == 0)
+		for (size_t uIndex = 0; GInfo.IsChunksAddress ? uIndex <= numElementsPerChunk : (skipCount <= minZeroAddress); ++uIndex)
 		{
-			++skipCount;
-			continue;
+			uintptr_t fUObject = NULL;
+			uintptr_t dwUObject = NULL;
+
+			// Get object address
+			if (GInfo.IsPointerNextToPointer)
+			{
+				dwUObject = Utils::MemoryObj->ReadAddress(chunkAddress + uIndex * Utils::PointerSize());
+			}
+			else
+			{
+				FUObjectItem fUObjectItem;
+				fUObject = chunkAddress + uIndex * fUObjectItem.StructSize();
+				fUObjectItem.ReadData(fUObject);
+				dwUObject = fUObjectItem.Object;
+			}
+
+			// Skip null pointer in GObjects array
+			if (dwUObject == NULL)
+			{
+				++skipCount;
+				continue;
+			}
+			skipCount = 0;
+
+			// Object container
+			auto curObject = std::make_unique<UEObject>();
+
+			// Break if found bad object in GObjects array, GObjects shouldn't have bad object
+			// check is not a static address !
+			if (Utils::MemoryObj->IsStaticAddress(dwUObject) || !ReadUObject(dwUObject, *curObject))
+				break;
+
+			lastObj = fUObject;
+			GObjObjects.push_back(std::make_pair(dwUObject, std::move(curObject)));
+			++GInfo.Count;
 		}
-
-		auto curObject = std::make_unique<UEObject>();
-		ReadUObject(dwUObject, uObject, *curObject);
-
-		gObjObjects.push_back(std::move(curObject));
-		++gObjectsCount;
-		skipCount = 0;
 	}
+
 	return true;
 }
 
-bool ObjectsStore::ReadUObject(const uintptr_t uObjectAddress, JsonStruct& uObject, UEObject& retUObj)
+bool ObjectsStore::ReadUObject(const uintptr_t uObjectAddress, UEObject& retUObj)
 {
-	// Alloc and Read the address as class
-	if (!uObject.ReadData(uObjectAddress, "UObject")) return false;
+	auto tmp = new UObject();
+	if (!Utils::IsValidRemoteAddress(Utils::MemoryObj, uObjectAddress) || !tmp->ReadData(uObjectAddress))
+		return false;
 
-	UObject coreObj;
-	coreObj.ObjAddress = uObjectAddress;
-	coreObj = uObject;
-
-	retUObj.Object = coreObj;
+	retUObj.Object = tmp;
 	return true;
 }
 
-void* ObjectsStore::GetAddress()
+uintptr_t ObjectsStore::GetAddress()
 {
-	return reinterpret_cast<void*>(gObjAddress);
+	return GInfo.GObjAddress;
 }
 
 size_t ObjectsStore::GetObjectsNum() const 
 {
-	return gObjectsCount;
+	return GInfo.Count;
 }
 
-UEObject& ObjectsStore::GetById(const size_t id) const
+UEObject* ObjectsStore::GetByIndex(const size_t index) const
 {
-	return *gObjObjects[id];
+	return GObjObjects[index].second.get();
+}
+
+UEObject* ObjectsStore::GetByAddress(const uintptr_t objAddress)
+{
+	return GObjObjects.Find(objAddress)->get();
+}
+
+UEObject* ObjectsStore::GetByAddress(const uintptr_t objAddress, bool& success)
+{
+	auto uniquePtr = GObjObjects.Find(objAddress, success);
+	return success ? uniquePtr->get() : &UEObjectEmpty;
 }
 
 UEClass ObjectsStore::FindClass(const std::string& name) const
 {
-	for (const UEObject& obj : *this)
-	{
-		if (obj.GetFullName() == name)
-		{
-			return obj.Cast<UEClass>();
-		}
-	}
+	auto it = std::find_if(this->begin(), this->end(), [&](const UEObject& obj) -> bool { return obj.GetFullName() == name; });
+
+	if (it != this->end())
+		return (*it).Cast<UEClass>();
+
 	return UEClass();
 }
 #pragma endregion
@@ -166,7 +210,8 @@ ObjectsIterator ObjectsStore::end() const
 
 ObjectsIterator::ObjectsIterator(const ObjectsStore& store)
 	: store(store),
-	  index(store.GetObjectsNum())
+	  index(store.GetObjectsNum()),
+	  current(nullptr)
 {
 }
 
@@ -174,7 +219,7 @@ ObjectsIterator::ObjectsIterator(const ObjectsStore& store, const size_t index)
 	: store(store),
 	index(index)
 {
-	current = store.GetById(index);
+	current = store.GetByIndex(index);
 }
 
 ObjectsIterator::ObjectsIterator(const ObjectsIterator& other)
@@ -208,8 +253,8 @@ ObjectsIterator& ObjectsIterator::operator++()
 {
 	for (++index; index < ObjectsStore(store).GetObjectsNum(); ++index)
 	{
-		current = store.GetById(index);
-		if (current.IsValid())
+		current = store.GetByIndex(index);
+		if (current->IsValid())
 		{
 			break;
 		}
@@ -220,7 +265,7 @@ ObjectsIterator& ObjectsIterator::operator++()
 ObjectsIterator ObjectsIterator::operator++(int)
 {
 	auto tmp(*this);
-	++(*this);
+	++*this;
 	return tmp;
 }
 
@@ -236,8 +281,8 @@ bool ObjectsIterator::operator!=(const ObjectsIterator& rhs) const
 
 UEObject ObjectsIterator::operator*() const
 {
-	assert(current.IsValid() && "ObjectsIterator::current is not valid!");
-	return current;
+	assert(current->IsValid() && "ObjectsIterator::current is not valid!");
+	return *current;
 }
 
 UEObject ObjectsIterator::operator->() const

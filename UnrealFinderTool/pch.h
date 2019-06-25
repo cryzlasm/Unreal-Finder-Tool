@@ -9,9 +9,13 @@
 #ifndef PCH_H
 #define PCH_H
 
+#pragma comment(lib, "version")
+#pragma comment(lib, "mincore")
+
 #include <Windows.h>
 #include "BypaPH.h"
-#include "StdColors.h"
+#include "Utils.h"
+#include "ImGUI/imgui.h"
 
 #define INVALID_POINTER_VALUE(x) ((x == (uintptr_t)-1) || x == NULL)
 #endif //PCH_H

@@ -3,6 +3,7 @@
 #include "ImGUI/imgui_internal.h"
 #include "ImGUI/imgui_impl_win32.h"
 #include "ImGUI/imgui_impl_dx11.h"
+#include "IconsFontAwesome.h"
 
 #include <tchar.h>
 #include "resource.h"
@@ -25,12 +26,17 @@ LRESULT WINAPI UiWindow::WndProc(const HWND hWnd, const UINT msg, const WPARAM w
 	// Get UiWindow Pointer
 	RECT rect;
 	auto pUiWindow = reinterpret_cast<UiWindow*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
+	if (pUiWindow == nullptr)
+		return DefWindowProc(hWnd, msg, wParam, lParam);
 
 	switch (msg)
 	{
 	case WM_SIZE:
+		if (wParam == SIZE_MINIMIZED)
+			pUiWindow->render = false;
 		if (gPd3dDevice != nullptr && wParam != SIZE_MINIMIZED)
 		{
+			pUiWindow->render = true;
 			pUiWindow->CleanupRenderTarget();
 			gPSwapChain->ResizeBuffers(0, static_cast<UINT>(LOWORD(lParam)), static_cast<UINT>(HIWORD(lParam)), DXGI_FORMAT_UNKNOWN, 0);
 			pUiWindow->CreateRenderTarget();
@@ -50,11 +56,22 @@ LRESULT WINAPI UiWindow::WndProc(const HWND hWnd, const UINT msg, const WPARAM w
 	case WM_DESTROY:
 		PostQuitMessage(0);
 		return 0;
+
+	case WM_CLOSE:
+		if (Utils::WorkingNow.AnyRunningTool())
+		{
+			MessageBox(nullptr, "Wait for current task finish first.", "", MB_OK | MB_ICONWARNING);
+			return 0;
+		}
 	}
 	return DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
-UiWindow::UiWindow(const char* title, const char* className, const int width, const int height): hWindow(nullptr), wc(), closed(false)
+UiWindow::UiWindow(const char* title, const char* className, const int width, const int height) :
+	hWindow(nullptr),
+	wc(), closed(false), render(true),
+	loopThreadHandle(nullptr),
+	uiStyle(nullptr)
 {
 	settings.Title = title;
 	settings.ClassName = className;
@@ -64,7 +81,7 @@ UiWindow::UiWindow(const char* title, const char* className, const int width, co
 
 UiWindow::~UiWindow()
 {
-	loopThread.join();
+	WaitForSingleObject(loopThreadHandle, 0);
 }
 
 void UiWindow::Show(UiFunc uiForm)
@@ -74,6 +91,10 @@ void UiWindow::Show(UiFunc uiForm)
 	{
 		uiFunc = std::move(uiForm);
 		loopThread = std::thread(&UiWindow::WinLoop, this);
+		auto ht = static_cast<HANDLE>(loopThread.native_handle());
+		SetThreadPriority(ht, THREAD_PRIORITY_ABOVE_NORMAL);
+		loopThreadHandle = ht;
+		loopThread.detach();
 	}
 }
 
@@ -100,12 +121,22 @@ void UiWindow::SetSize(const int newWidth, const int newHeight)
 	SetWindowPos(hWindow, nullptr, 0, 0, settings.Width, settings.Height, SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOREDRAW);
 }
 
+ImVec2 UiWindow::GetSize()
+{
+	return { static_cast<float>(settings.Width), static_cast<float>(settings.Height) };
+}
+
 bool UiWindow::CreateUiWindow(std::string& title, std::string& className, const int width, const int height)
 {
 	// Create application window
 	wc = { sizeof(WNDCLASSEX), CS_CLASSDC, &UiWindow::WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, className.c_str(), nullptr };
 	RegisterClassEx(&wc);
-	hWindow = CreateWindow(wc.lpszClassName, title.c_str(), WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, 100, 100, width, height, NULL, NULL, wc.hInstance, NULL);
+	hWindow = CreateWindow(wc.lpszClassName, title.c_str(), WS_OVERLAPPED | WS_SYSMENU  | WS_MINIMIZEBOX , 100, 100, width, height, NULL, NULL, wc.hInstance, NULL);
+	if (!hWindow) {
+		UnregisterClass(wc.lpszClassName, wc.hInstance);
+		MessageBox(HWND_DESKTOP, "Unable to create main window!", "CorrM Finder", MB_ICONERROR | MB_OK);
+		return false;
+	}
 
 	HINSTANCE hInstance = wc.hInstance;
 	HICON hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
@@ -173,14 +204,28 @@ void UiWindow::SetupImGui()
 {
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
-	ImGuiIO& io = ImGui::GetIO(); (void)io;
-
+	ImGuiIO& io = ui::GetIO();
+	uiStyle = &ui::GetStyle();
 	SetStyle();
 
 	// Setup Platform/Renderer bindings
 	ImGui_ImplWin32_Init(hWindow);
 	ImGui_ImplDX11_Init(gPd3dDevice, gPd3dDeviceContext);
 
+	// merge in icons from Font Awesome
+	io.Fonts->AddFontDefault();
+	static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+	ImFontConfig icons_config;
+	icons_config.MergeMode = true; icons_config.PixelSnapH = true;
+	auto fontAwesome = io.Fonts->AddFontFromFileTTF(FONT_ICON_FILE_NAME_FAS, 11.0f, &icons_config, icons_ranges);
+
+	if (fontAwesome == nullptr)
+	{
+		std::string msg = "Unable to load " + std::string(FONT_ICON_FILE_NAME_FAS) + ".";
+		ShowWindow(hWindow, SW_HIDE);
+		MessageBox(HWND_DESKTOP, msg.c_str(), "Error!", MB_OK | MB_ICONERROR);
+		PostQuitMessage(-1);
+	}
 	settings.ClearColor = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 }
 
@@ -214,7 +259,8 @@ void UiWindow::WinLoop()
 			continue;
 		}
 
-		RenderFrame();
+		if (render)
+			RenderFrame();
 	}
 
 	ImGui_ImplDX11_Shutdown();
@@ -235,9 +281,10 @@ void UiWindow::RenderFrame()
 	ImGui::NewFrame();
 
 	ImGui::SetNextWindowPos({ 0, 0 });
-	ImGui::SetNextWindowSize({ static_cast<float>(settings.Width - 17), static_cast<float>(settings.Height - 38) });
-	ImGui::Begin("Main", &settings.IsOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
-	uiFunc(*this);
+	ImGui::SetNextWindowSize({ static_cast<float>(settings.Width - 15), static_cast<float>(settings.Height - 38) });
+	ImGui::SetNextWindowContentSize({ static_cast<float>(settings.Width - 15), static_cast<float>(settings.Height - 38) });
+	ImGui::Begin("Main", &settings.IsOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+	uiFunc(this);
 	ImGui::End();
 
 	// Rendering
@@ -319,4 +366,19 @@ void UiWindow::SetStyle()
 	io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\Ruda-Bold.ttf", 14);
 	io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\Ruda-Bold.ttf", 18);
 	*/
+}
+
+ImGuiStyle& UiWindow::GetUiStyle()
+{
+	return *uiStyle;
+}
+
+HWND UiWindow::GetWindowHandle()
+{
+	return hWindow;
+}
+
+void UiWindow::FlashWindow()
+{
+	::FlashWindow(hWindow, TRUE);
 }

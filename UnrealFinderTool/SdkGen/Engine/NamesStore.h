@@ -5,20 +5,12 @@
 class Memory;
 class NamesIterator;
 
-class GName
-{
-public:
-	size_t Index;
-	std::string AnsiName;
-};
-
 class NamesStore
 {
 	friend NamesIterator;
-	static GName* gNames;
-	static int gNamesChunkCount, gNamesChunks;
+	static std::vector<FNameEntity> gNames;
+	static int chunkCount, gNamesChunks;
 	static uintptr_t gNamesAddress;
-	static bool FetchData();
 	static bool ReadGNameArray(uintptr_t address);
 	static bool IsValidAddress(uintptr_t address);
 
@@ -27,11 +19,11 @@ public:
 	/// Initializes this object.
 	/// </summary>
 	/// <returns>true if it succeeds, false if it fails.</returns>
-	static bool Initialize(uintptr_t gNamesAddress);
+	static bool Initialize(uintptr_t gNamesAddress, bool forceReInit = true);
 
 	/// <summary>Gets the address of the global names store.</summary>
 	/// <returns>The address of the global names store.</returns>
-	static void* GetAddress();
+	static uintptr_t GetAddress();
 
 	NamesIterator begin();
 	NamesIterator begin() const;
@@ -56,10 +48,17 @@ public:
 	/// </summary>
 	/// <param name="id">The identifier.</param>
 	/// <returns>The name.</returns>
-	std::string GetById(size_t id);
+	std::string GetByIndex(size_t id);
+
+	/// <summary>
+	/// Gets id by a name.
+	/// </summary>
+	/// <param name="name">Name of object.</param>
+	/// <returns>Id of name.</returns>
+	int GetByName(const std::string& name);
 };
 
-class NamesIterator : public std::iterator<std::forward_iterator_tag, GName>
+class NamesIterator : public std::iterator<std::forward_iterator_tag, FNameEntity>
 {
 	const NamesStore& store;
 	size_t index;
@@ -79,7 +78,7 @@ public:
 
 	bool operator!=(const NamesIterator& rhs) const;
 
-	GName operator*() const;
+	FNameEntity operator*() const;
 
-	GName operator->() const;
+	FNameEntity operator->() const;
 };

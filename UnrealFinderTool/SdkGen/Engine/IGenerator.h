@@ -6,6 +6,12 @@
 #include <iterator>
 #include "PatternScan.h"
 
+enum class SdkType
+{
+	Internal = 0,
+	External = 1
+};
+
 class IGenerator
 {
 public:
@@ -35,16 +41,35 @@ public:
 	virtual std::string GetGameName() const = 0;
 
 	/// <summary>
-	/// Gets the short name of the game.
+	/// Gets the name of the game.
 	/// </summary>
-	/// <returns>The short name.</returns>
-	//virtual std::string GetGameNameShort() const = 0;
+	/// <returns>The game name. </returns>
+	virtual void SetGameName(const std::string& gameName) const = 0;
+
+	/// <summary>
+	/// Sets the version of the game.
+	/// </summary>
+	/// <returns>The version of the game.</returns>
+	virtual void SetGameVersion(const std::string& gameVersion) const = 0;
 
 	/// <summary>
 	/// Gets the version of the game.
 	/// </summary>
 	/// <returns>The version of the game.</returns>
-	//virtual std::string GetGameVersion() const = 0;
+	virtual std::string GetGameVersion() const = 0;
+
+	/// <summary>
+	/// Gets generator type.
+	/// </summary>
+	virtual SdkType GetSdkType() const = 0;
+
+	/// <summary>
+	/// Sets generator type.
+	/// </summary>
+	/// <returns>The version of the game.</returns>
+	virtual void SetSdkType(SdkType sdkType) const = 0;
+
+	virtual void SetIsGObjectsChunks(bool isChunks) const = 0;
 
 	/// <summary>
 	/// Check if the generator should dump the object and name arrays.
@@ -52,7 +77,7 @@ public:
 	/// <returns>true if the arrays should get dumped.</returns>
 	virtual bool ShouldDumpArrays() const
 	{
-		return true;
+		return false;
 	}
 
 	/// <summary>
@@ -100,10 +125,7 @@ public:
 	/// If hooks with access to the parameters are need, this method should return true.
 	/// </summary>
 	/// <returns>True if a function parameters file should be generated.</returns>
-	virtual bool ShouldGenerateFunctionParametersFile() const
-	{
-		return true;
-	}
+	virtual bool ShouldGenerateFunctionParametersFile() const = 0;
 
 	/// <summary>
 	/// Gets namespace name for the classes. If the name is empty no namespace gets generated.
@@ -180,6 +202,29 @@ public:
 			return type;
 		}
 		return it->second;
+	}
+
+	/// <summary>
+	/// Checks if a name is Cpp Keywords.
+	/// </summary>
+	/// <param name="name">The parameter name.</param>
+	/// <returns>If no override is found the original name is returned.</returns>
+	virtual std::string GetSafeKeywordsName(const std::string& name) const
+	{
+		std::string ret = name;
+		auto it = keywordsName.find(ret);
+		if (it == std::end(keywordsName))
+		{
+			for (const auto& badChar : badChars)
+				ret = Utils::ReplaceString(ret, badChar.first, badChar.second);
+			return ret;
+		}
+
+		ret = it->second;
+		for (const auto& badChar : badChars)
+			ret = Utils::ReplaceString(ret, badChar.first, badChar.second);
+
+		return ret;
 	}
 
 	struct PredefinedMember
@@ -297,6 +342,8 @@ public:
 
 protected:
 	std::unordered_map<std::string, size_t> alignasClasses;
+	std::unordered_map<std::string, std::string> badChars;
+	std::unordered_map<std::string, std::string> keywordsName;
 	std::unordered_map<std::string, std::string> overrideTypes;
 	std::unordered_map<std::string, std::vector<PredefinedMember>> predefinedMembers;
 	std::unordered_map<std::string, std::vector<PredefinedMember>> predefinedStaticMembers;

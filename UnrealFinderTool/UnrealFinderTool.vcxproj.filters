@@ -43,6 +43,9 @@
     <Filter Include="ImGUI">
       <UniqueIdentifier>{fb173c5c-784b-4b34-b33b-8ef0bdee17d0}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Midi">
+      <UniqueIdentifier>{936adf0a-284f-46ed-95e9-d9524622ccbf}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h">
@@ -50,9 +53,6 @@
     </ClInclude>
     <ClInclude Include="GnamesFinder.h">
       <Filter>Tools</Filter>
-    </ClInclude>
-    <ClInclude Include="Color.h">
-      <Filter>Utils</Filter>
     </ClInclude>
     <ClInclude Include="Utils.h">
       <Filter>Utils</Filter>
@@ -87,9 +87,6 @@
     <ClInclude Include="SdkGenerator.h">
       <Filter>Tools</Filter>
     </ClInclude>
-    <ClInclude Include="StdColors.h">
-      <Filter>Utils</Filter>
-    </ClInclude>
     <ClInclude Include="json.hpp">
       <Filter>Utils</Filter>
     </ClInclude>
@@ -115,9 +112,6 @@
       <Filter>SdkGen\Engine</Filter>
     </ClInclude>
     <ClInclude Include="SdkGen\Engine\NamesStore.h">
-      <Filter>SdkGen\Engine</Filter>
-    </ClInclude>
-    <ClInclude Include="SdkGen\Engine\Logger.h">
       <Filter>SdkGen\Engine</Filter>
     </ClInclude>
     <ClInclude Include="SdkGen\Engine\IGenerator.h">
@@ -174,6 +168,51 @@
     <ClInclude Include="SdkGen\EngineClasses.h">
       <Filter>SdkGen</Filter>
     </ClInclude>
+    <ClInclude Include="ClassFinder.h">
+      <Filter>Tools</Filter>
+    </ClInclude>
+    <ClInclude Include="IconsFontAwesome.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="Debug.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryEditor.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Midi\MIDI_Resource.h">
+      <Filter>Midi</Filter>
+    </ClInclude>
+    <ClInclude Include="Midi\MIDI.h">
+      <Filter>Midi</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="HttpWorker.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp">
@@ -184,9 +223,6 @@
     </ClCompile>
     <ClCompile Include="GnamesFinder.cpp">
       <Filter>Tools</Filter>
-    </ClCompile>
-    <ClCompile Include="Color.cpp">
-      <Filter>Utils</Filter>
     </ClCompile>
     <ClCompile Include="Utils.cpp">
       <Filter>Utils</Filter>
@@ -226,9 +262,6 @@
     </ClCompile>
     <ClCompile Include="SdkGen\Engine\UE4\PropertyFlags.cpp">
       <Filter>SdkGen\Engine\UE4</Filter>
-    </ClCompile>
-    <ClCompile Include="SdkGen\Engine\Logger.cpp">
-      <Filter>SdkGen\Engine</Filter>
     </ClCompile>
     <ClCompile Include="SdkGen\Engine\NamesStore.cpp">
       <Filter>SdkGen\Engine</Filter>
@@ -272,6 +305,21 @@
     <ClCompile Include="ImGUI\imgui_demo.cpp">
       <Filter>ImGUI</Filter>
     </ClCompile>
+    <ClCompile Include="ClassFinder.cpp">
+      <Filter>Tools</Filter>
+    </ClCompile>
+    <ClCompile Include="Debug.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="Logger.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="Midi\MIDI.cpp">
+      <Filter>Midi</Filter>
+    </ClCompile>
+    <ClCompile Include="HttpWorker.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="UnrealFinderTool.rc">
@@ -279,8 +327,11 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <Image Include="..\..\..\..\..\Downloads\win.ico">
+    <Image Include="..\Resources\win.ico">
       <Filter>Resource Files</Filter>
     </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>

@@ -4,9 +4,28 @@
 
 class Generator final : public IGenerator
 {
+	mutable std::string gameName;
+	mutable std::string gameVersion;
+	mutable bool isGObjectsChunks = false;
+	mutable SdkType sdkType = SdkType::Internal;
+
 public:
 	bool Initialize() override
 	{
+		keywordsName =
+		{
+			{"return", "returnValue"},
+			{"continue", "continueValue"},
+			{"break", "breakValue"},
+			{"int", "intValue"}
+		};
+
+		badChars =
+		{
+			{",", ""},
+			{"!", ""}
+		};
+
 		alignasClasses =
 		{
 			{ "ScriptStruct CoreUObject.Plane", 16 },
@@ -20,7 +39,7 @@ public:
 		virtualFunctionPattern["Class CoreUObject.Object"] =
 		{
 			{ 
-				PatternScan::Parse("ProcessEvent", 0, "45 33 F6 4D 8B E0", 0xFF),
+				PatternScan::Parse("ProcessEvent", 0, "FF FF FF FF FF", 0xFE),
 				R"(	inline void ProcessEvent(class UFunction* function, void* parms)
 	{
 		return GetVFunction<void(*)(UObject*, class UFunction*, void*)>(this, %d)(this, function, parms);
@@ -161,6 +180,67 @@ public:
 		}
 		return nullptr;
 	})"),
+			PredefinedMethod::Inline(R"(	template<typename T>
+	static T* FindObject()
+	{
+		auto v = T::StaticClass();
+		for (int i = 0; i < SDK::UObject::GetGlobalObjects().Num(); ++i)
+		{
+			auto object = SDK::UObject::GetGlobalObjects().GetByIndex(i);
+
+			if (object == nullptr)
+			{
+				continue;
+			}
+
+			if (object->IsA(v))
+			{
+				return static_cast<T*>(object);
+			}
+		}
+		return nullptr;
+	})"),
+			PredefinedMethod::Inline(R"(	template<typename T>
+	static std::vector<T*> FindObjects(const std::string& name)
+	{
+		std::vector<T*> ret;
+		for (int i = 0; i < GetGlobalObjects().Num(); ++i)
+		{
+			auto object = GetGlobalObjects().GetByIndex(i);
+
+			if (object == nullptr)
+			{
+				continue;
+			}
+
+			if (object->GetFullName() == name)
+			{
+				ret.push_back(static_cast<T*>(object));
+			}
+		}
+		return ret;
+	})"),
+			PredefinedMethod::Inline(R"(	template<typename T>
+	static std::vector<T*> FindObjects()
+	{
+		std::vector<T*> ret;
+		auto v = T::StaticClass();
+		for (int i = 0; i < SDK::UObject::GetGlobalObjects().Num(); ++i)
+		{
+			auto object = SDK::UObject::GetGlobalObjects().GetByIndex(i);
+
+			if (object == nullptr)
+			{
+				continue;
+			}
+
+			if (object->IsA(v))
+			{
+				ret.push_back(static_cast<T*>(object));
+			}
+		}
+		return ret;
+	})"),
 			PredefinedMethod::Inline(R"(	static UClass* FindClass(const std::string& name)
 	{
 		return FindObject<UClass>(name);
@@ -197,24 +277,37 @@ public:
 
 	std::string GetGameName() const override
 	{
-		return "Unreal Finder Tool @ CorrM";
+		return gameName;
 	}
 
-	/*
-	std::string GetGameNameShort() const override
+	void SetGameName(const std::string& gameName) const override
 	{
-		return "";
+		this->gameName = gameName;
 	}
 
 	std::string GetGameVersion() const override
 	{
-		return "";
+		return this->gameVersion;
 	}
-	*/
+
+	void SetGameVersion(const std::string& gameVersion) const override
+	{
+		this->gameVersion = gameVersion;
+	}
+
+	SdkType GetSdkType() const override
+	{
+		return this->sdkType;
+	}
+
+	void SetSdkType(const SdkType sdkType) const override
+	{
+		this->sdkType = sdkType;
+	}
 
 	std::string GetNamespaceName() const override
 	{
-		return "Classes";
+		return "SDK";
 	}
 
 	std::vector<std::string> GetIncludes() const override
@@ -224,8 +317,11 @@ public:
 
 	std::string GetBasicDeclarations() const override
 	{
-		return R"(template<typename Fn>
-inline Fn GetVFunction(const void *instance, std::size_t index)
+		std::string basic_str = R"(
+void InitSdk(const std::string& moduleName, size_t gObjectsOffset, size_t gNamesOffset);
+
+template<typename Fn>
+inline Fn GetVFunction(const void* instance, std::size_t index)
 {
 	auto vtable = *reinterpret_cast<const void***>(const_cast<void*>(instance));
 	return reinterpret_cast<Fn>(vtable[index]);
@@ -236,10 +332,20 @@ class UObject;
 class FUObjectItem
 {
 public:
-	UObject* Object;
-	int32_t Flags;
-	int32_t SerialNumber;
+)";
+		static JsonStruct jStruct = JsonReflector::GetStruct("FUObjectItem");
+		for (const auto& varContainer : jStruct.Vars)
+		{
+			auto var = varContainer.second;
+			std::string type = var.Type;
+			if (Utils::IsNumber(type))
+				basic_str += "\t" + std::string("unsigned char ") + var.Name + "[" + type + "]" + ";\n";
+			else
+				basic_str += "\t" + var.Type + " " + var.Name + ";\n";
+		}
+		basic_str += "\n";
 
+		basic_str += R"(
 	enum class ObjectFlags : int32_t
 	{
 		None = 0,
@@ -260,8 +366,10 @@ public:
 	{
 		return !!(Flags & static_cast<std::underlying_type_t<ObjectFlags>>(ObjectFlags::PendingKill));
 	}
-};
-
+};)";
+		if (!isGObjectsChunks)
+		{
+			basic_str += R"(
 class TUObjectArray
 {
 public:
@@ -289,7 +397,71 @@ private:
 	int32_t MaxElements;
 	int32_t NumElements;
 };
+)";
+		}
+		else
+		{
+			basic_str += R"(
+class TUObjectArray
+{
+	enum
+	{
+		NumElementsPerChunk = 64 * 1024,
+	};
+public:
+	inline int32_t Num() const
+	{
+		return NumElements;
+	}
 
+	inline int32_t Max() const
+	{
+		return MaxElements;
+	}
+
+	inline bool IsValidIndex(int32_t Index) const
+	{
+		return Index < Num() && Index >= 0;
+	}
+
+	inline FUObjectItem* GetObjectPtr(int32_t Index) const
+	{
+		const int32_t ChunkIndex = Index / NumElementsPerChunk;
+		const int32_t WithinChunkIndex = Index % NumElementsPerChunk;
+		if (!IsValidIndex(Index)) return nullptr;
+		if (ChunkIndex > NumChunks) return nullptr;
+		if (Index > MaxElements) return nullptr;
+		FUObjectItem* Chunk = Objects[ChunkIndex];
+		if (!Chunk) return nullptr;
+		return Chunk + WithinChunkIndex;
+	}
+
+	inline UObject* GetByIndex(int32_t index) const
+	{
+		FUObjectItem* ItemPtr = GetObjectPtr(index);
+		if (!ItemPtr) return nullptr;
+
+		return (*ItemPtr).Object;
+	}
+
+	inline FUObjectItem* GetItemByIndex(int32_t index) const
+	{
+		FUObjectItem* ItemPtr = GetObjectPtr(index);
+		if (!ItemPtr) return nullptr;
+		return ItemPtr;
+	}
+
+private:
+	FUObjectItem** Objects;
+	FUObjectItem* PreAllocatedObjects;
+	int32_t MaxElements;
+	int32_t NumElements;
+	int32_t MaxChunks;
+	int32_t NumChunks;
+};
+)";
+		}
+		basic_str += R"(
 class FUObjectArray
 {
 public:
@@ -388,18 +560,23 @@ public:
 		return index < Num() && index >= 0;
 	}
 
-	inline ElementType const* const& operator[](int32_t index) const
+	inline ElementType* operator[](int32_t index) const
 	{
-		return *GetItemPtr(index);
+		ElementType* ItemPtr = GetItemPtr(index);
+		return ItemPtr;
 	}
 
 private:
-	inline ElementType const* const* GetItemPtr(int32_t Index) const
+	inline ElementType* GetItemPtr(int32_t Index) const
 	{
 		int32_t ChunkIndex = Index / ElementsPerChunk;
 		int32_t WithinChunkIndex = Index % ElementsPerChunk;
-		ElementType** Chunk = Chunks[ChunkIndex];
-		return Chunk + WithinChunkIndex;
+		ElementType* Chunk = (*Chunks)[ChunkIndex];
+		int offset = WithinChunkIndex * )";
+		basic_str += std::to_string(Utils::MemoryObj->Is64Bit ? 0x8 : 0x4) + R"(;
+		uintptr_t ptrAddress = *reinterpret_cast<uintptr_t*>(reinterpret_cast<unsigned char*>(Chunk) + offset);
+		ElementType* ItemPtr = reinterpret_cast<ElementType*>(ptrAddress);
+		return ItemPtr;
 	}
 
 	enum
@@ -412,7 +589,7 @@ private:
 	int32_t NumChunks;
 };
 
-using TNameEntryArray = TStaticIndirectArrayThreadSafeRead<FNameEntry, 2 * 1024 * 1024, 16384>;
+using TNameEntryArray = TStaticIndirectArrayThreadSafeRead<FNameEntry, 4 * 1024 * 1024, 16384>;
 
 struct FName
 {
@@ -455,7 +632,7 @@ struct FName
 			}
 		}
 
-		for (auto i = 0; i < GetGlobalNames().Num(); ++i)
+		for (size_t i = 0; i < GetGlobalNames().Num(); ++i)
 		{
 			if (GetGlobalNames()[i] != nullptr)
 			{
@@ -734,12 +911,23 @@ class TLazyObjectPtr : FLazyObjectPtr
 {
 
 };)";
+		return basic_str;
 	}
 
 	std::string GetBasicDefinitions() const override
 	{
-		return R"(TNameEntryArray* FName::GNames = nullptr;
+		return R"(
+TNameEntryArray* FName::GNames = nullptr;
 FUObjectArray* UObject::GObjects = nullptr;
+
+//---------------------------------------------------------------------------
+void InitSdk(const std::string& moduleName, const size_t gObjectsOffset, const size_t gNamesOffset)
+{
+	auto mBaseAddress = reinterpret_cast<uintptr_t>(GetModuleHandleA(moduleName.c_str()));
+
+	UObject::GObjects = reinterpret_cast<SDK::FUObjectArray*>(mBaseAddress + gObjectsOffset);
+	FName::GNames = reinterpret_cast<SDK::TNameEntryArray*>(mBaseAddress + gNamesOffset);
+}
 //---------------------------------------------------------------------------
 bool FWeakObjectPtr::IsValid() const
 {
@@ -776,6 +964,16 @@ UObject* FWeakObjectPtr::Get() const
 	return nullptr;
 }
 //---------------------------------------------------------------------------)";
+	}
+
+	bool ShouldGenerateFunctionParametersFile() const override
+	{
+		return sdkType == SdkType::Internal;
+	}
+
+	void SetIsGObjectsChunks(const bool isChunks) const override
+	{
+		isGObjectsChunks = isChunks;
 	}
 };
 

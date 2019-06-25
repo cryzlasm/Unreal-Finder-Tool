@@ -6,6 +6,7 @@
 *.user
 *.userosscache
 *.sln.docstates
+*.vcxproj.filters
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
@@ -21,6 +22,7 @@ bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
+Dumps/
 
 # Visual Studio 2015 cache/options directory
 .vs/
@@ -194,6 +196,7 @@ ClientBin/
 *.publishsettings
 node_modules/
 orleans.codegen.cs
+!/DebugSymbols/*.pdb
 
 # Since there are multiple workflows, uncomment next line to ignore bower_components
 # (https://github.com/github/gitignore/pull/1529#issuecomment-104372622)
@@ -262,3 +265,4 @@ __pycache__/
 /UnrealFinderTool/ObjectDump.txt
 /UnrealFinderTool/NameDump.txt
 /UnrealFinderTool/imgui.ini
+/UnrealFinderTool/kprocesshacker.sys

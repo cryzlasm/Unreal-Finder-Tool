@@ -50,9 +50,7 @@ std::string SimplifyEnumName(std::string&& name)
 {
 	const auto index = name.find_last_of(':');
 	if (index == std::string::npos)
-	{
-		return name;
-	}
+		return "";
 
 	return name.substr(index + 1);
 }
@@ -63,7 +61,7 @@ std::string MakeUniqueCppNameImpl(const T& t)
 	std::string name;
 	if (ObjectsStore().CountObjects<T>(t.GetName()) > 1)
 	{
-		name += MakeValidName(t.GetOuter().GetName()) + "_";
+		name += MakeValidName(t.GetOuter()->GetName()) + "_";
 	}
 	return name + MakeValidName(t.GetName());
 }
@@ -90,9 +88,9 @@ std::string MakeUniqueCppName(const UEStruct& ss)
 	{
 		if (ObjectsStore().CountObjects<UEStruct>(ss.GetName()) > 1)
 		{
-			name += MakeValidName(ss.GetOuter().GetNameCPP()) + "_";
+			name += MakeValidName(ss.GetOuter()->GetNameCpp()) + "_";
 		}
 	}
 	
-	return name + MakeValidName(ss.GetNameCPP());
+	return name + MakeValidName(ss.GetNameCpp());
 }

@@ -6,17 +6,21 @@
 #include "IGenerator.h"
 #include "Package.h"
 
-void PrintFileHeader(std::ostream& os, const std::vector<std::string>& includes, bool isHeaderFile)
+void PrintFileHeader(std::ostream& os, const std::vector<std::string>& pragmas, const std::vector<std::string>& includes, const bool isHeaderFile)
 {
 	extern IGenerator* generator;
 
 	if (isHeaderFile)
-	{
-		os << "#pragma once\n\n";
-	}
+		os << "#pragma once\n";
 
-	os << tfm::format("// %s SDK\n\n", generator->GetGameName())
-		<< tfm::format("#ifdef _MSC_VER\n\t#pragma pack(push, 0x%X)\n#endif\n\n", generator->GetGlobalMemberAlignment());
+	if (!pragmas.empty())
+	{
+		for (auto&& i : pragmas) { os << "#pragma " << i << "\n"; }
+	}
+	os << "\n";
+
+	if (generator->GetSdkType() == SdkType::External)
+		os << "#include \"" << Utils::Settings.SdkGen.MemoryHeader << "\"\n";
 
 	if (!includes.empty())
 	{
@@ -24,17 +28,23 @@ void PrintFileHeader(std::ostream& os, const std::vector<std::string>& includes,
 		os << "\n";
 	}
 
+	os << tfm::format("// Name: %s, Version: %s\n\n", generator->GetGameName(), generator->GetGameVersion())
+	   << tfm::format("#ifdef _MSC_VER\n\t#pragma pack(push, 0x%X)\n#endif\n\n", generator->GetGlobalMemberAlignment());
+
 	if (!generator->GetNamespaceName().empty())
-	{
 		os << "namespace " << generator->GetNamespaceName() << "\n{\n";
-	}
 }
 
-void PrintFileHeader(std::ostream& os, bool isHeaderFile)
+void PrintFileHeader(std::ostream& os, const std::vector<std::string>& includes, const bool isHeaderFile)
+{
+	PrintFileHeader(os, {}, includes, isHeaderFile);
+}
+
+void PrintFileHeader(std::ostream& os, const bool isHeaderFile)
 {
 	extern IGenerator* generator;
 
-	PrintFileHeader(os, std::vector<std::string>(), isHeaderFile);
+	PrintFileHeader(os, {}, isHeaderFile);
 }
 
 void PrintFileFooter(std::ostream& os)
@@ -51,12 +61,12 @@ void PrintFileFooter(std::ostream& os)
 
 void PrintSectionHeader(std::ostream& os, const char* name)
 {
-	os << "//---------------------------------------------------------------------------\n"
-		<< "//" << name << "\n"
+	os  << "//---------------------------------------------------------------------------\n"
+		<< "// " << name << "\n"
 		<< "//---------------------------------------------------------------------------\n\n";
 }
 
-std::string GenerateFileName(FileContentType type, const Package& package)
+std::string GenerateFileName(const FileContentType type, const Package& package)
 {
 	extern IGenerator* generator;
 
@@ -64,16 +74,16 @@ std::string GenerateFileName(FileContentType type, const Package& package)
 	switch (type)
 	{
 	case FileContentType::Structs:
-		name = "%s_structs.hpp";
+		name = "%s_structs.h";
 		break;
 	case FileContentType::Classes:
-		name = "%s_classes.hpp";
+		name = "%s_classes.h";
 		break;
 	case FileContentType::Functions:
 		name = "%s_functions.cpp";
 		break;
 	case FileContentType::FunctionParameters:
-		name = "%s_parameters.hpp";
+		name = "%s_parameters.h";
 		break;
 	default:
 		assert(false);
